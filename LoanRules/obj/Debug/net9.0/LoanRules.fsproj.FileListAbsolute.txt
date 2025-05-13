@@ -1,0 +1,14 @@
+/Users/lorran/Documents/Insper/ProgFunc/webhook-funcional/LoanRules/bin/Debug/net9.0/LoanRules.deps.json
+/Users/lorran/Documents/Insper/ProgFunc/webhook-funcional/LoanRules/bin/Debug/net9.0/LoanRules.dll
+/Users/lorran/Documents/Insper/ProgFunc/webhook-funcional/LoanRules/bin/Debug/net9.0/LoanRules.pdb
+/Users/lorran/Documents/Insper/ProgFunc/webhook-funcional/LoanRules/bin/Debug/net9.0/LoanRules.xml
+/Users/lorran/Documents/Insper/ProgFunc/webhook-funcional/LoanRules/obj/Debug/net9.0/LoanRules.fsproj.AssemblyReference.cache
+/Users/lorran/Documents/Insper/ProgFunc/webhook-funcional/LoanRules/obj/Debug/net9.0/LoanRules.AssemblyInfoInputs.cache
+/Users/lorran/Documents/Insper/ProgFunc/webhook-funcional/LoanRules/obj/Debug/net9.0/LoanRules.AssemblyInfo.fs
+/Users/lorran/Documents/Insper/ProgFunc/webhook-funcional/LoanRules/obj/Debug/net9.0/LoanRules.fsproj.CoreCompileInputs.cache
+/Users/lorran/Documents/Insper/ProgFunc/webhook-funcional/LoanRules/obj/Debug/net9.0/LoanRules.sourcelink.json
+/Users/lorran/Documents/Insper/ProgFunc/webhook-funcional/LoanRules/obj/Debug/net9.0/LoanRules.dll
+/Users/lorran/Documents/Insper/ProgFunc/webhook-funcional/LoanRules/obj/Debug/net9.0/refint/LoanRules.dll
+/Users/lorran/Documents/Insper/ProgFunc/webhook-funcional/LoanRules/obj/Debug/net9.0/LoanRules.xml
+/Users/lorran/Documents/Insper/ProgFunc/webhook-funcional/LoanRules/obj/Debug/net9.0/LoanRules.pdb
+/Users/lorran/Documents/Insper/ProgFunc/webhook-funcional/LoanRules/obj/Debug/net9.0/ref/LoanRules.dll

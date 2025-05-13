@@ -1,0 +1,10 @@
+{
+  "version": 2,
+  "dgSpecHash": "A271diiNqJI=",
+  "success": true,
+  "projectFilePath": "/Users/lorran/Documents/Insper/ProgFunc/webhook-funcional/LoanRules/LoanRules.fsproj",
+  "expectedPackageFiles": [
+    "/Users/lorran/.nuget/packages/fsharp.core/9.0.202/fsharp.core.9.0.202.nupkg.sha512"
+  ],
+  "logs": []
+}
