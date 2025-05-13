@@ -2,5 +2,45 @@
 <doc>
 <assembly><name>LoanRules</name></assembly>
 <members>
+<member name="M:LoanRules.Validation.validatePayload(LoanRules.Types.WebhookPayload)">
+<summary>
+ Validates all aspects of a webhook payload
+</summary>
+</member>
+<member name="M:LoanRules.Validation.validateTimestamp(System.String)">
+<summary>
+ Validates that the timestamp is in a valid format
+</summary>
+</member>
+<member name="M:LoanRules.Validation.validateCurrency(System.String)">
+<summary>
+ Validates that the currency is supported
+</summary>
+</member>
+<member name="M:LoanRules.Validation.validateAmount(System.Decimal)">
+<summary>
+ Validates that the amount is positive
+</summary>
+</member>
+<member name="M:LoanRules.Validation.validateEventType(System.String)">
+<summary>
+ Validates that the event type is supported
+</summary>
+</member>
+<member name="T:LoanRules.Validation">
+<summary>
+ Module for validating webhook payloads
+</summary>
+</member>
+<member name="T:LoanRules.Types.WebhookPayload">
+<summary>
+ Represents a payment webhook payload
+</summary>
+</member>
+<member name="T:LoanRules.Types">
+<summary>
+ Module containing types for the webhook payload
+</summary>
+</member>
 </members>
 </doc>

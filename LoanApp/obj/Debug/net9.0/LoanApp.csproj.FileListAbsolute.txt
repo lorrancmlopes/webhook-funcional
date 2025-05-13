@@ -32,3 +32,15 @@
 /Users/lorran/Documents/Insper/ProgFunc/webhook-funcional/LoanApp/obj/Debug/net9.0/LoanApp.pdb
 /Users/lorran/Documents/Insper/ProgFunc/webhook-funcional/LoanApp/obj/Debug/net9.0/LoanApp.genruntimeconfig.cache
 /Users/lorran/Documents/Insper/ProgFunc/webhook-funcional/LoanApp/obj/Debug/net9.0/ref/LoanApp.dll
+/Users/lorran/Documents/Insper/ProgFunc/webhook-funcional/LoanApp/obj/Debug/net9.0/LoanApp.MvcApplicationPartsAssemblyInfo.cache
+/Users/lorran/Documents/Insper/ProgFunc/webhook-funcional/LoanApp/bin/Debug/net9.0/LoanApp.staticwebassets.endpoints.json
+/Users/lorran/Documents/Insper/ProgFunc/webhook-funcional/LoanApp/obj/Debug/net9.0/scopedcss/bundle/LoanApp.styles.css
+/Users/lorran/Documents/Insper/ProgFunc/webhook-funcional/LoanApp/obj/Debug/net9.0/staticwebassets.build.json
+/Users/lorran/Documents/Insper/ProgFunc/webhook-funcional/LoanApp/obj/Debug/net9.0/staticwebassets.development.json
+/Users/lorran/Documents/Insper/ProgFunc/webhook-funcional/LoanApp/obj/Debug/net9.0/staticwebassets.build.endpoints.json
+/Users/lorran/Documents/Insper/ProgFunc/webhook-funcional/LoanApp/obj/Debug/net9.0/staticwebassets/msbuild.LoanApp.Microsoft.AspNetCore.StaticWebAssets.props
+/Users/lorran/Documents/Insper/ProgFunc/webhook-funcional/LoanApp/obj/Debug/net9.0/staticwebassets/msbuild.LoanApp.Microsoft.AspNetCore.StaticWebAssetEndpoints.props
+/Users/lorran/Documents/Insper/ProgFunc/webhook-funcional/LoanApp/obj/Debug/net9.0/staticwebassets/msbuild.build.LoanApp.props
+/Users/lorran/Documents/Insper/ProgFunc/webhook-funcional/LoanApp/obj/Debug/net9.0/staticwebassets/msbuild.buildMultiTargeting.LoanApp.props
+/Users/lorran/Documents/Insper/ProgFunc/webhook-funcional/LoanApp/obj/Debug/net9.0/staticwebassets/msbuild.buildTransitive.LoanApp.props
+/Users/lorran/Documents/Insper/ProgFunc/webhook-funcional/LoanApp/obj/Debug/net9.0/staticwebassets.pack.json
