@@ -187,7 +187,7 @@ User-Agent: <client-identifier>               # Optional for validation
 
 ```
 ┌─────────────────┐    ┌─────────────────┐
-│   Python Tests │    │  External APIs  │
+│   Python Tests  │    │  External APIs  │
 │  (Integration)  │    │ (Confirmation)  │
 └─────────┬───────┘    └─────────┬───────┘
           │                      │
