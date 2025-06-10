@@ -36,8 +36,12 @@ def run_server():
 
 # Carrega argumentos de linha de comando ou usa valores padrão
 async def load_args():
+    import time
+    # Use timestamp-based unique transaction ID to avoid duplicates across test runs
+    base_id = f"payment-tx-{int(time.time())}"
+    
     event = sys.argv[1] if len(sys.argv) > 1 else "payment_success"
-    transaction_id = sys.argv[2] if len(sys.argv) > 2 else "payment-tx-001"
+    transaction_id = sys.argv[2] if len(sys.argv) > 2 else base_id
     amount = sys.argv[3] if len(sys.argv) > 3 else "49.90"
     currency = sys.argv[4] if len(sys.argv) > 4 else "BRL"
     timestamp = sys.argv[5] if len(sys.argv) > 5 else "2025-06-10T12:00:00Z"
@@ -131,8 +135,17 @@ if __name__ == "__main__":
     server_thread = Thread(target=run_server, daemon=True)
     server_thread.start()
 
-    # Aguarda o servidor estar pronto
-    asyncio.run(asyncio.sleep(1))
+    # Aguarda o servidor estar pronto e testa a conectividade
+    import time
+    asyncio.run(asyncio.sleep(2))  # Wait longer for server startup
+    
+    # Test server connectivity
+    try:
+        test_response = requests.get("http://127.0.0.1:5001", timeout=1)
+        print("✅ Test server is running on port 5001")
+    except:
+        print("⚠️ Test server may not be fully ready on port 5001")
+        asyncio.run(asyncio.sleep(1))  # Wait a bit more
 
     # Carrega argumentos e executa os testes
     url, headers, data = asyncio.run(load_args())

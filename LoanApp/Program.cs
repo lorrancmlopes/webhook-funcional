@@ -4,9 +4,27 @@ using System.Collections.Concurrent;
 using System.Net.Http;
 using Microsoft.FSharp.Core;
 using LoanRules;
+using System.Text;
+using System.Security.Cryptography;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
+using System.ComponentModel.DataAnnotations;
+using System.ComponentModel.DataAnnotations.Schema;
 
 var builder = WebApplication.CreateBuilder(args);
+
+// Configure Entity Framework with SQLite
+builder.Services.AddDbContext<WebhookDbContext>(options =>
+    options.UseSqlite("Data Source=webhook_transactions.db"));
+
 var app = builder.Build();
+
+// Ensure database is created
+using (var scope = app.Services.CreateScope())
+{
+    var dbContext = scope.ServiceProvider.GetRequiredService<WebhookDbContext>();
+    dbContext.Database.EnsureCreated();
+}
 
 // HTTP client for making requests to mock endpoints
 var httpClient = new HttpClient();
@@ -33,8 +51,12 @@ var trustedIPs = new List<string> { "127.0.0.1", "::1", "localhost" }; // For te
 const bool ENABLE_STRICT_TIMING = false; // Set to true for production
 const bool ENABLE_AUTHENTICITY_CHECKS = true; // Can be disabled for testing
 
+
+
+
+
 // Webhook endpoint
-app.MapPost("/webhook", async (HttpContext context) =>
+app.MapPost("/webhook", async (HttpContext context, WebhookDbContext dbContext) =>
 {
     var requestStartTime = DateTime.UtcNow;
 
@@ -111,6 +133,13 @@ app.MapPost("/webhook", async (HttpContext context) =>
             string.IsNullOrEmpty(payloadDto.Timestamp))
         {
             app.Logger.LogWarning("Missing required fields in payload - sending cancellation");
+
+            // Save failed transaction to database
+            var failedPayload = new Types.WebhookPayload(
+                payloadDto.Event ?? "", payloadDto.TransactionId, payloadDto.Amount,
+                payloadDto.Currency ?? "", payloadDto.Timestamp ?? DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ"));
+            await SaveTransactionToDatabase(dbContext, failedPayload, "Cancelled", "Missing required fields", rawPayload: json);
+
             await SimulateCancellationRequest(payloadDto.TransactionId);
             return Results.BadRequest(new { error = "Missing required fields" });
         }
@@ -131,6 +160,10 @@ app.MapPost("/webhook", async (HttpContext context) =>
         {
             string errorMessage = validationResult.ErrorValue;
             app.Logger.LogWarning($"Validation failed: {errorMessage} - sending cancellation");
+
+            // Save failed transaction to database
+            await SaveTransactionToDatabase(dbContext, payload, "Cancelled", errorMessage, rawPayload: json);
+
             await SimulateCancellationRequest(payload.TransactionId);
             return Results.BadRequest(new { error = errorMessage });
         }
@@ -148,6 +181,11 @@ app.MapPost("/webhook", async (HttpContext context) =>
         if (shouldCancel)
         {
             app.Logger.LogWarning($"Data mismatch detected - cancelling transaction: {cancelReason}");
+
+            // Save cancelled transaction to database
+            await SaveTransactionToDatabase(dbContext, payload, "Cancelled", cancelReason,
+                dataMismatchDetected: true, rawPayload: json);
+
             await SimulateCancellationRequest(payload.TransactionId);
             return Results.BadRequest(new { error = $"Transaction cancelled: {cancelReason}" });
         }
@@ -167,6 +205,10 @@ app.MapPost("/webhook", async (HttpContext context) =>
         {
             string integrityError = integrityResult.ErrorValue;
             app.Logger.LogWarning($"Integrity validation failed: {integrityError} - sending cancellation");
+
+            // Save failed transaction to database
+            await SaveTransactionToDatabase(dbContext, payload, "Cancelled", integrityError, rawPayload: json);
+
             await SimulateCancellationRequest(payload.TransactionId);
             return Results.BadRequest(new { error = $"Integrity check failed: {integrityError}" });
         }
@@ -210,6 +252,14 @@ app.MapPost("/webhook", async (HttpContext context) =>
             {
                 string authError = authenticityResult.ErrorValue;
                 app.Logger.LogWarning($"Authenticity validation failed: {authError} - sending cancellation");
+
+                // Save failed transaction to database
+                var authRequestFingerprint = !string.IsNullOrEmpty(nonce) && !string.IsNullOrEmpty(requestId)
+                    ? LoanRules.Authenticity.generateRequestFingerprint(authPayload) : null;
+                await SaveTransactionToDatabase(dbContext, payload, "Cancelled", authError,
+                    nonce: nonce, requestId: requestId, clientIp: clientIP, userAgent: userAgent,
+                    requestFingerprint: authRequestFingerprint, rawPayload: json);
+
                 await SimulateCancellationRequest(payload.TransactionId);
                 return Results.BadRequest(new { error = $"Authenticity check failed: {authError}" });
             }
@@ -222,15 +272,40 @@ app.MapPost("/webhook", async (HttpContext context) =>
             }
         }
 
-        // Check for transaction uniqueness - return 400 for duplicates
-        if (!processedTransactionIds.Add(payload.TransactionId))
+        // Check for transaction uniqueness in database - return 400 for duplicates
+        var existingTransaction = await dbContext.Transactions
+            .FirstOrDefaultAsync(t => t.TransactionId == payload.TransactionId);
+
+        if (existingTransaction != null)
         {
             app.Logger.LogWarning($"Duplicate transaction ID: {payload.TransactionId} - returning 400");
             return Results.BadRequest(new { error = "Duplicate transaction ID" });
         }
 
+        // Add to in-memory collection for quick subsequent checks within same session
+        processedTransactionIds.Add(payload.TransactionId);
+
         // Process valid transaction - initialize enhanced confirmation system
         app.Logger.LogInformation($"Valid transaction processed: {payload.TransactionId} - initializing confirmation");
+
+        // Generate request fingerprint for audit
+        string? requestFingerprint = null;
+        if (ENABLE_AUTHENTICITY_CHECKS && !string.IsNullOrEmpty(nonce) && !string.IsNullOrEmpty(requestId))
+        {
+            var authPayload = new Types.AuthenticatedPayload(
+                payload, FSharpOption<string>.Some(nonce), FSharpOption<string>.Some(requestId),
+                string.IsNullOrEmpty(clientIP) ? null : FSharpOption<string>.Some(clientIP),
+                string.IsNullOrEmpty(userAgent) ? null : FSharpOption<string>.Some(userAgent),
+                requestStartTime);
+            requestFingerprint = LoanRules.Authenticity.generateRequestFingerprint(authPayload);
+        }
+
+        // Save successful transaction to database
+        var savedTransaction = await SaveTransactionToDatabase(dbContext, payload, "Pending",
+            integrityValidated: signature != null, authenticityValidated: ENABLE_AUTHENTICITY_CHECKS,
+            dataMismatchDetected: mismatchArray.Length > 0,
+            nonce: nonce, requestId: requestId, clientIp: clientIP, userAgent: userAgent,
+            requestFingerprint: requestFingerprint, rawPayload: json);
 
         // Create confirmation record using F# function
         var confirmationRecord = LoanRules.Confirmation.createConfirmationRecord(payload, MAX_CONFIRMATION_RETRIES, CONFIRMATION_RETRY_INTERVAL);
@@ -409,13 +484,19 @@ app.MapPost("/test-mismatch", async (HttpContext context) =>
 async Task<(Types.ConfirmationStatus, int)> AttemptTransactionConfirmation(Types.WebhookPayload payload, Types.ConfirmationRecord record)
 {
     var stopwatch = System.Diagnostics.Stopwatch.StartNew();
-    var attemptNumber = record.Attempts.Length + 1;
 
-    app.Logger.LogInformation($"Attempting confirmation #{attemptNumber} for transaction {payload.TransactionId}");
+    // Create a new scope to get fresh DbContext instance
+    using var scope = app.Services.CreateScope();
+    var dbContext = scope.ServiceProvider.GetRequiredService<WebhookDbContext>();
+
+    // Determine attempt number
+    var attemptNumber = record.Attempts.Length + 1;
 
     try
     {
-        // Validate confirmation data
+        app.Logger.LogInformation($"Attempting confirmation #{attemptNumber} for transaction {payload.TransactionId}");
+
+        // Validate confirmation data using F# function
         var validationResult = LoanRules.Confirmation.validateConfirmationData(payload);
         if (validationResult.IsError)
         {
@@ -423,6 +504,10 @@ async Task<(Types.ConfirmationStatus, int)> AttemptTransactionConfirmation(Types
                 FSharpOption<string>.Some($"Validation failed: {validationResult.ErrorValue}"), null);
             var updatedRecord = LoanRules.Confirmation.updateConfirmationRecord(record, errorAttempt);
             confirmationRecords.TryUpdate(payload.TransactionId, updatedRecord, record);
+
+            // Update database with failed confirmation
+            await UpdateTransactionConfirmationStatus(dbContext, payload.TransactionId, "Failed",
+                attemptNumber, confirmationError: validationResult.ErrorValue);
 
             var auditLog = LoanRules.Confirmation.createConfirmationAuditLog(updatedRecord, FSharpOption<Types.ConfirmationAttempt>.Some(errorAttempt));
             app.Logger.LogWarning($"CONFIRMATION_AUDIT: {auditLog}");
@@ -464,6 +549,14 @@ async Task<(Types.ConfirmationStatus, int)> AttemptTransactionConfirmation(Types
         var finalRecord = LoanRules.Confirmation.updateConfirmationRecord(record, attempt);
         confirmationRecords.TryUpdate(payload.TransactionId, finalRecord, record);
 
+        // Update database with confirmation status
+        var dbStatus = isSuccess ? "Confirmed" : (LoanRules.Confirmation.shouldRetryConfirmation(finalRecord) ? "Retrying" : "Failed");
+        var confirmedAt = isSuccess ? DateTime.UtcNow : (DateTime?)null;
+        var dbErrorMessage = Microsoft.FSharp.Core.FSharpOption<string>.get_IsSome(errorMessage) ? errorMessage.Value : null;
+
+        await UpdateTransactionConfirmationStatus(dbContext, payload.TransactionId, dbStatus,
+            attemptNumber, confirmedAt, dbErrorMessage);
+
         // Create audit log
         var finalAuditLog = LoanRules.Confirmation.createConfirmationAuditLog(finalRecord, FSharpOption<Types.ConfirmationAttempt>.Some(attempt));
         app.Logger.LogInformation($"CONFIRMATION_AUDIT: {finalAuditLog}");
@@ -497,6 +590,10 @@ async Task<(Types.ConfirmationStatus, int)> AttemptTransactionConfirmation(Types
 
         var errorRecord = LoanRules.Confirmation.updateConfirmationRecord(record, errorAttempt);
         confirmationRecords.TryUpdate(payload.TransactionId, errorRecord, record);
+
+        // Update database with error
+        await UpdateTransactionConfirmationStatus(dbContext, payload.TransactionId, "Failed",
+            attemptNumber, confirmationError: ex.Message);
 
         var errorAuditLog = LoanRules.Confirmation.createConfirmationAuditLog(errorRecord, FSharpOption<Types.ConfirmationAttempt>.Some(errorAttempt));
         app.Logger.LogError($"CONFIRMATION_AUDIT: {errorAuditLog}");
@@ -644,6 +741,232 @@ app.MapGet("/confirmation-stats", () =>
     });
 });
 
+// NEW: Database Query Endpoints
+
+// Get all transactions with optional filtering
+app.MapGet("/transactions", async (WebhookDbContext dbContext,
+    string? status = null,
+    string? @event = null,
+    int page = 1,
+    int pageSize = 50) =>
+{
+    var query = dbContext.Transactions.AsQueryable();
+
+    if (!string.IsNullOrEmpty(status))
+        query = query.Where(t => t.Status == status);
+
+    if (!string.IsNullOrEmpty(@event))
+        query = query.Where(t => t.Event == @event);
+
+    var totalCount = await query.CountAsync();
+    var transactions = await query
+        .OrderByDescending(t => t.ProcessedAt)
+        .Skip((page - 1) * pageSize)
+        .Take(pageSize)
+        .Select(t => new
+        {
+            id = t.Id,
+            transaction_id = t.TransactionId,
+            @event = t.Event,
+            amount = t.Amount,
+            currency = t.Currency,
+            timestamp = t.Timestamp.ToString("yyyy-MM-ddTHH:mm:ssZ"),
+            processed_at = t.ProcessedAt.ToString("yyyy-MM-ddTHH:mm:ssZ"),
+            status = t.Status,
+            error_message = t.ErrorMessage,
+            integrity_validated = t.IntegrityValidated,
+            authenticity_validated = t.AuthenticityValidated,
+            data_mismatch_detected = t.DataMismatchDetected,
+            confirmation_attempts = t.ConfirmationAttempts,
+            confirmed_at = t.ConfirmedAt != null ? t.ConfirmedAt.Value.ToString("yyyy-MM-ddTHH:mm:ssZ") : null,
+            nonce = t.Nonce,
+            request_id = t.RequestId,
+            client_ip = t.ClientIp,
+            user_agent = t.UserAgent,
+            request_fingerprint = t.RequestFingerprint
+        })
+        .ToArrayAsync();
+
+    return Results.Ok(new
+    {
+        total_count = totalCount,
+        page = page,
+        page_size = pageSize,
+        total_pages = (int)Math.Ceiling((double)totalCount / pageSize),
+        transactions = transactions
+    });
+});
+
+// Get specific transaction by ID
+app.MapGet("/transactions/{transactionId}", async (WebhookDbContext dbContext, string transactionId) =>
+{
+    var transaction = await dbContext.Transactions
+        .FirstOrDefaultAsync(t => t.TransactionId == transactionId);
+
+    if (transaction == null)
+    {
+        return Results.NotFound(new { error = "Transaction not found" });
+    }
+
+    return Results.Ok(new
+    {
+        id = transaction.Id,
+        transaction_id = transaction.TransactionId,
+        @event = transaction.Event,
+        amount = transaction.Amount,
+        currency = transaction.Currency,
+        timestamp = transaction.Timestamp.ToString("yyyy-MM-ddTHH:mm:ssZ"),
+        processed_at = transaction.ProcessedAt.ToString("yyyy-MM-ddTHH:mm:ssZ"),
+        status = transaction.Status,
+        error_message = transaction.ErrorMessage,
+        integrity_validated = transaction.IntegrityValidated,
+        authenticity_validated = transaction.AuthenticityValidated,
+        data_mismatch_detected = transaction.DataMismatchDetected,
+        confirmation_attempts = transaction.ConfirmationAttempts,
+        confirmed_at = transaction.ConfirmedAt?.ToString("yyyy-MM-ddTHH:mm:ssZ"),
+        confirmation_error = transaction.ConfirmationError,
+        nonce = transaction.Nonce,
+        request_id = transaction.RequestId,
+        client_ip = transaction.ClientIp,
+        user_agent = transaction.UserAgent,
+        request_fingerprint = transaction.RequestFingerprint,
+        raw_payload = transaction.RawPayload
+    });
+});
+
+// Get transaction statistics
+app.MapGet("/transaction-stats", async (WebhookDbContext dbContext) =>
+{
+    var totalTransactions = await dbContext.Transactions.CountAsync();
+    var confirmedCount = await dbContext.Transactions.CountAsync(t => t.Status == "Confirmed");
+    var cancelledCount = await dbContext.Transactions.CountAsync(t => t.Status == "Cancelled");
+    var failedCount = await dbContext.Transactions.CountAsync(t => t.Status == "Failed");
+    var pendingCount = await dbContext.Transactions.CountAsync(t => t.Status == "Pending");
+    var retryingCount = await dbContext.Transactions.CountAsync(t => t.Status == "Retrying");
+
+    var integrityValidatedCount = await dbContext.Transactions.CountAsync(t => t.IntegrityValidated);
+    var authenticityValidatedCount = await dbContext.Transactions.CountAsync(t => t.AuthenticityValidated);
+    var dataMismatchDetectedCount = await dbContext.Transactions.CountAsync(t => t.DataMismatchDetected);
+
+    var avgConfirmationAttempts = await dbContext.Transactions
+        .Where(t => t.ConfirmationAttempts > 0)
+        .AverageAsync(t => (double)t.ConfirmationAttempts);
+
+    var recentTransactions = await dbContext.Transactions
+        .OrderByDescending(t => t.ProcessedAt)
+        .Take(5)
+        .Select(t => new { t.TransactionId, t.Status, t.ProcessedAt })
+        .ToArrayAsync();
+
+    return Results.Ok(new
+    {
+        total_transactions = totalTransactions,
+        status_breakdown = new
+        {
+            confirmed = confirmedCount,
+            cancelled = cancelledCount,
+            failed = failedCount,
+            pending = pendingCount,
+            retrying = retryingCount
+        },
+        security_stats = new
+        {
+            integrity_validated = integrityValidatedCount,
+            authenticity_validated = authenticityValidatedCount,
+            data_mismatch_detected = dataMismatchDetectedCount
+        },
+        confirmation_stats = new
+        {
+            avg_attempts = Math.Round(avgConfirmationAttempts, 2),
+            success_rate = totalTransactions > 0 ? Math.Round((double)confirmedCount / totalTransactions * 100, 2) : 0
+        },
+        recent_transactions = recentTransactions.Select(t => new
+        {
+            transaction_id = t.TransactionId,
+            status = t.Status,
+            processed_at = t.ProcessedAt.ToString("yyyy-MM-ddTHH:mm:ssZ")
+        })
+    });
+});
+
+// Database Helper Methods
+async Task<TransactionRecord> SaveTransactionToDatabase(
+    WebhookDbContext dbContext,
+    Types.WebhookPayload payload,
+    string status,
+    string? errorMessage = null,
+    bool integrityValidated = false,
+    bool authenticityValidated = false,
+    bool dataMismatchDetected = false,
+    string? nonce = null,
+    string? requestId = null,
+    string? clientIp = null,
+    string? userAgent = null,
+    string? requestFingerprint = null,
+    string? rawPayload = null)
+{
+    // Check if transaction already exists to prevent UNIQUE constraint violations
+    var existingTransaction = await dbContext.Transactions
+        .FirstOrDefaultAsync(t => t.TransactionId == payload.TransactionId);
+
+    if (existingTransaction != null)
+    {
+        app.Logger.LogWarning($"DATABASE: Transaction {payload.TransactionId} already exists, skipping save");
+        return existingTransaction;
+    }
+
+    var transaction = new TransactionRecord
+    {
+        TransactionId = payload.TransactionId,
+        Event = payload.Event,
+        Amount = payload.Amount,
+        Currency = payload.Currency,
+        Timestamp = string.IsNullOrEmpty(payload.Timestamp) ? DateTime.UtcNow : DateTime.Parse(payload.Timestamp),
+        ProcessedAt = DateTime.UtcNow,
+        Status = status,
+        ErrorMessage = errorMessage,
+        IntegrityValidated = integrityValidated,
+        AuthenticityValidated = authenticityValidated,
+        DataMismatchDetected = dataMismatchDetected,
+        Nonce = nonce,
+        RequestId = requestId,
+        ClientIp = clientIp,
+        UserAgent = userAgent,
+        RequestFingerprint = requestFingerprint,
+        RawPayload = rawPayload,
+        ConfirmationAttempts = 0
+    };
+
+    dbContext.Transactions.Add(transaction);
+    await dbContext.SaveChangesAsync();
+
+    app.Logger.LogInformation($"DATABASE: Saved transaction {payload.TransactionId} with status: {status}");
+    return transaction;
+}
+
+async Task UpdateTransactionConfirmationStatus(
+    WebhookDbContext dbContext,
+    string transactionId,
+    string status,
+    int confirmationAttempts,
+    DateTime? confirmedAt = null,
+    string? confirmationError = null)
+{
+    var transaction = await dbContext.Transactions
+        .FirstOrDefaultAsync(t => t.TransactionId == transactionId);
+
+    if (transaction != null)
+    {
+        transaction.Status = status;
+        transaction.ConfirmationAttempts = confirmationAttempts;
+        transaction.ConfirmedAt = confirmedAt;
+        transaction.ConfirmationError = confirmationError;
+
+        await dbContext.SaveChangesAsync();
+        app.Logger.LogInformation($"DATABASE: Updated transaction {transactionId} confirmation status: {status}");
+    }
+}
+
 // Start the server
 app.Logger.LogInformation("Webhook server starting up with comprehensive validation and confirmation system...");
 app.Logger.LogInformation($"HMAC secret configured: {WEBHOOK_SECRET[..10]}...");
@@ -652,8 +975,92 @@ app.Logger.LogInformation($"Strict timing: {(ENABLE_STRICT_TIMING ? "ENABLED" : 
 app.Logger.LogInformation($"Trusted IPs: {string.Join(", ", trustedIPs)}");
 app.Logger.LogInformation($"Confirmation system: ENABLED - Max retries: {MAX_CONFIRMATION_RETRIES}, Retry interval: {CONFIRMATION_RETRY_INTERVAL.TotalSeconds}s");
 app.Logger.LogInformation($"Confirmation endpoint: {CONFIRMATION_ENDPOINT}");
+app.Logger.LogInformation("Database persistence: ENABLED - SQLite database: webhook_transactions.db");
+app.Logger.LogInformation("Available endpoints: /webhook, /transactions, /transaction-stats, /confirmation-stats");
 app.Urls.Add("http://localhost:5000");
 app.Run();
+
+// Database Models
+public class TransactionRecord
+{
+    [Key]
+    public int Id { get; set; }
+
+    [Required]
+    [MaxLength(100)]
+    public string TransactionId { get; set; } = "";
+
+    [Required]
+    [MaxLength(50)]
+    public string Event { get; set; } = "";
+
+    [Column(TypeName = "decimal(18,2)")]
+    public decimal Amount { get; set; }
+
+    [Required]
+    [MaxLength(10)]
+    public string Currency { get; set; } = "";
+
+    public DateTime Timestamp { get; set; }
+
+    public DateTime ProcessedAt { get; set; }
+
+    [MaxLength(20)]
+    public string Status { get; set; } = ""; // "Confirmed", "Cancelled", "Failed"
+
+    [MaxLength(500)]
+    public string? ErrorMessage { get; set; }
+
+    // Security and validation flags
+    public bool IntegrityValidated { get; set; }
+    public bool AuthenticityValidated { get; set; }
+    public bool DataMismatchDetected { get; set; }
+
+    [MaxLength(100)]
+    public string? Nonce { get; set; }
+
+    [MaxLength(100)]
+    public string? RequestId { get; set; }
+
+    [MaxLength(45)]
+    public string? ClientIp { get; set; }
+
+    [MaxLength(200)]
+    public string? UserAgent { get; set; }
+
+    [MaxLength(64)]
+    public string? RequestFingerprint { get; set; }
+
+    // Confirmation details
+    public int ConfirmationAttempts { get; set; }
+    public DateTime? ConfirmedAt { get; set; }
+
+    [MaxLength(1000)]
+    public string? ConfirmationError { get; set; }
+
+    // Raw payload for audit
+    [MaxLength(4000)]
+    public string? RawPayload { get; set; }
+}
+
+// Database Context
+public class WebhookDbContext : DbContext
+{
+    public WebhookDbContext(DbContextOptions<WebhookDbContext> options) : base(options) { }
+
+    public DbSet<TransactionRecord> Transactions { get; set; }
+
+    protected override void OnModelCreating(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<TransactionRecord>(entity =>
+        {
+            entity.HasIndex(e => e.TransactionId).IsUnique();
+            entity.HasIndex(e => e.ProcessedAt);
+            entity.HasIndex(e => e.Status);
+            entity.HasIndex(e => new { e.Event, e.Status });
+        });
+    }
+}
 
 // DTO class for JSON deserialization
 public class WebhookPayloadDto
