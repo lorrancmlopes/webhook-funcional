@@ -71,7 +71,7 @@ This project implements a robust webhook service for processing payment confirma
    ```bash
    python -m venv venv
    source venv/bin/activate  # On Windows: venv\Scripts\activate
-   pip install requests asyncio
+   pip install requests asyncio fastapi uvicorn
    ```
 
 ## 🚀 Running the Application
