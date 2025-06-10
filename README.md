@@ -122,7 +122,7 @@ The project includes a comprehensive test suite with **46 total tests** across 5
 dotnet run --project LoanApp &
 
 # Run individual test suites
-python test_webhook.py          # 6/6 tests - Core webhook functionality
+python test_webhook.py          # test_webhook_v2.py
 python test_authenticity.py     # 11/11 tests - Security validation
 python test_data_mismatch.py    # 16/16 tests - Fraud detection
 python test_confirmation.py     # 7/7 tests - Confirmation system
@@ -136,6 +136,51 @@ python test_integrity_fixed.py  # 6/6 tests - HMAC validation
 - ✅ **Fraud Detection**: 13+ data mismatch validation rules
 - ✅ **Confirmation System**: Retry logic and status tracking
 - ✅ **Integrity Validation**: HMAC signature verification
+
+**🎯 Why v2 Over Original:**
+The original `test_webhook.py` may occasionally fail due to:
+- Database UNIQUE constraint violations (fixed transaction IDs)
+- Race conditions during server startup
+- Old timestamp validation conflicts
+- Limited error reporting
+
+**Use v2.**
+
+### 🕐 Critical Fix: Timestamp Validation
+
+The most important difference between the original and v2 tests is **timestamp handling**:
+
+#### ❌ **Original Problem** (`test_webhook.py`)
+```python
+timestamp = "2023-10-01T12:00:00Z"  # ❌ FIXED OLD DATE (almost 2 years old)
+```
+
+#### ✅ **v2 Solution** (`test_webhook_v2.py`)
+```python
+current_time = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())  # ✅ CURRENT TIME
+timestamp = current_time
+```
+
+#### 🔍 **Why This Matters**
+
+The logs show:
+
+```
+info: LoanApp[0]
+      DATA_MISMATCH_AUDIT: [2025-06-10 22:12:24] DATA_MISMATCH PASS: TxID=..., Mismatches=[No mismatches detected]
+```
+
+**With 2023 timestamp:**
+- ❌ **Triggers fraud detection** - "Old timestamp detected" 
+- ❌ **Transaction gets CANCELLED** - Flagged as suspicious
+- ❌ **Test expects confirmation but gets cancellation**
+- ❌ **Results in false negative test failures**
+
+**With current timestamp:**  
+- ✅ **Passes all validation rules**
+- ✅ **Transaction gets CONFIRMED** - Processed normally
+- ✅ **Test receives expected confirmation**
+- ✅ **Results in 100% reliable test outcomes**
 
 ## 📡 API Documentation
 
