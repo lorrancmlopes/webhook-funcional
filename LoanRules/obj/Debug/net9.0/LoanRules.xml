@@ -2,6 +2,56 @@
 <doc>
 <assembly><name>LoanRules</name></assembly>
 <members>
+<member name="M:LoanRules.Authenticity.createAuditLogEntry(LoanRules.Types.AuthenticatedPayload,Microsoft.FSharp.Core.FSharpResult{LoanRules.Types.AuthenticatedPayload,System.String})">
+<summary>
+ Creates an audit log entry for the authentication attempt
+</summary>
+</member>
+<member name="M:LoanRules.Authenticity.validateTransactionAuthenticity(LoanRules.Types.AuthenticatedPayload,Microsoft.FSharp.Collections.FSharpList{System.String},Microsoft.FSharp.Core.FSharpOption{Microsoft.FSharp.Collections.FSharpList{System.String}},System.Boolean)">
+<summary>
+ Comprehensive authenticity validation
+</summary>
+</member>
+<member name="M:LoanRules.Authenticity.validateRequestTiming(LoanRules.Types.AuthenticatedPayload)">
+<summary>
+ Validates request timing to prevent replay attacks (requires strict timing)
+</summary>
+</member>
+<member name="M:LoanRules.Authenticity.generateRequestFingerprint(LoanRules.Types.AuthenticatedPayload)">
+<summary>
+ Generates a fingerprint for the request based on multiple factors
+</summary>
+</member>
+<member name="M:LoanRules.Authenticity.validateUserAgent(Microsoft.FSharp.Core.FSharpOption{System.String})">
+<summary>
+ Validates User-Agent header for known patterns
+</summary>
+</member>
+<member name="M:LoanRules.Authenticity.validateClientIP(Microsoft.FSharp.Core.FSharpOption{System.String},Microsoft.FSharp.Core.FSharpOption{Microsoft.FSharp.Collections.FSharpList{System.String}})">
+<summary>
+ Validates client IP address format and optionally against whitelist
+</summary>
+</member>
+<member name="M:LoanRules.Authenticity.validateStrictTimestampFreshness(System.String)">
+<summary>
+ Validates strict timestamp freshness (5 minutes window for production)
+</summary>
+</member>
+<member name="M:LoanRules.Authenticity.validateRequestIdFormat(Microsoft.FSharp.Core.FSharpOption{System.String})">
+<summary>
+ Validates request ID format (alphanumeric with hyphens/underscores, 8-64 chars)
+</summary>
+</member>
+<member name="M:LoanRules.Authenticity.validateNonceFormat(Microsoft.FSharp.Core.FSharpOption{System.String})">
+<summary>
+ Validates nonce format (UUID or 32+ hex characters)
+</summary>
+</member>
+<member name="T:LoanRules.Authenticity">
+<summary>
+ Module for transaction authenticity validation
+</summary>
+</member>
 <member name="M:LoanRules.Integrity.validatePayloadIntegrity(LoanRules.Types.WebhookPayload,System.String,Microsoft.FSharp.Core.FSharpOption{System.String},System.String)">
 <summary>
  Comprehensive integrity validation
@@ -70,6 +120,11 @@
 <member name="T:LoanRules.Validation">
 <summary>
  Module for validating webhook payloads
+</summary>
+</member>
+<member name="T:LoanRules.Types.AuthenticatedPayload">
+<summary>
+ Extended payload with authenticity metadata
 </summary>
 </member>
 <member name="T:LoanRules.Types.WebhookPayload">
