@@ -2,6 +2,56 @@
 <doc>
 <assembly><name>LoanRules</name></assembly>
 <members>
+<member name="M:LoanRules.DataMismatch.createMismatchAuditLog(LoanRules.Types.WebhookPayload,Microsoft.FSharp.Collections.FSharpList{LoanRules.Types.MismatchResult},System.Boolean)">
+<summary>
+ Creates a detailed audit log for mismatch detection
+</summary>
+</member>
+<member name="M:LoanRules.DataMismatch.shouldCancelTransaction(Microsoft.FSharp.Collections.FSharpList{LoanRules.Types.MismatchResult})">
+<summary>
+ Determines if transaction should be cancelled based on mismatches
+</summary>
+</member>
+<member name="M:LoanRules.DataMismatch.detectDataMismatches(LoanRules.Types.WebhookPayload)">
+<summary>
+ Comprehensive data mismatch detection
+</summary>
+</member>
+<member name="M:LoanRules.DataMismatch.validateBusinessRules(LoanRules.Types.WebhookPayload)">
+<summary>
+ Business rule validation for payment processing
+</summary>
+</member>
+<member name="M:LoanRules.DataMismatch.validateCrossFieldConsistency(LoanRules.Types.WebhookPayload)">
+<summary>
+ Cross-field validation for data consistency
+</summary>
+</member>
+<member name="M:LoanRules.DataMismatch.validateTimestampLogic(System.String,System.DateTime)">
+<summary>
+ Validates timestamp for business logic consistency
+</summary>
+</member>
+<member name="M:LoanRules.DataMismatch.validateTransactionIdPatterns(System.String)">
+<summary>
+ Validates transaction ID patterns for potential issues
+</summary>
+</member>
+<member name="M:LoanRules.DataMismatch.validateCurrencyContext(System.String,System.Decimal)">
+<summary>
+ Validates currency against region and amount expectations
+</summary>
+</member>
+<member name="M:LoanRules.DataMismatch.detectSuspiciousAmountPatterns(System.Decimal)">
+<summary>
+ Detects suspicious amount patterns
+</summary>
+</member>
+<member name="T:LoanRules.DataMismatch">
+<summary>
+ Module for data mismatch detection and validation
+</summary>
+</member>
 <member name="M:LoanRules.Authenticity.createAuditLogEntry(LoanRules.Types.AuthenticatedPayload,Microsoft.FSharp.Core.FSharpResult{LoanRules.Types.AuthenticatedPayload,System.String})">
 <summary>
  Creates an audit log entry for the authentication attempt
@@ -120,6 +170,11 @@
 <member name="T:LoanRules.Validation">
 <summary>
  Module for validating webhook payloads
+</summary>
+</member>
+<member name="T:LoanRules.Types.MismatchResult">
+<summary>
+ Data mismatch detection result
 </summary>
 </member>
 <member name="T:LoanRules.Types.AuthenticatedPayload">

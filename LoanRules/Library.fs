@@ -20,6 +20,14 @@ module Types =
         UserAgent: string option
         RequestTimestamp: System.DateTime
     }
+    
+    /// Data mismatch detection result
+    type MismatchResult = {
+        IsMismatch: bool
+        MismatchType: string
+        Description: string
+        ShouldCancel: bool
+    }
 
 /// Module for validating webhook payloads
 module Validation =
@@ -246,3 +254,155 @@ module Authenticity =
         let timestamp = DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss")
         let fingerprint = generateRequestFingerprint authPayload
         $"[{timestamp}] AUTH {status}: TxID={authPayload.Payload.TransactionId}, Nonce={nonce}, IP={ip}, Fingerprint={fingerprint}{errorMsg}"
+
+/// Module for data mismatch detection and validation
+module DataMismatch =
+    open System
+    open System.Text.RegularExpressions
+    open Types
+    
+    /// Detects suspicious amount patterns
+    let detectSuspiciousAmountPatterns (amount: decimal) : MismatchResult =
+        let amountStr = amount.ToString("F2")
+        
+        // Check for suspicious patterns
+        let isRoundAmount = amount % 1m = 0m && amount >= 1000m  // Large round amounts
+        let isRepeatingDigits = Regex.IsMatch(amountStr, @"^(\d)\1+\.00$")  // 111.00, 222.00, etc.
+        let isSequentialDigits = Regex.IsMatch(amountStr, @"^(123|234|345|456|567|678|789|012).*")  // Sequential patterns
+        let isExtremeAmount = amount > 100000m || amount < 0.01m  // Very high or very low amounts
+        let isPreciselyRounded = amount % 0.01m = 0m && amount % 0.1m <> 0m && amount > 100m  // Precisely rounded large amounts
+        
+        if isRoundAmount then
+            { IsMismatch = true; MismatchType = "SUSPICIOUS_AMOUNT"; Description = "Large round amount detected"; ShouldCancel = false }
+        elif isRepeatingDigits then
+            { IsMismatch = true; MismatchType = "PATTERN_AMOUNT"; Description = "Repeating digit pattern in amount"; ShouldCancel = true }
+        elif isSequentialDigits then
+            { IsMismatch = true; MismatchType = "PATTERN_AMOUNT"; Description = "Sequential digit pattern in amount"; ShouldCancel = true }
+        elif isExtremeAmount then
+            { IsMismatch = true; MismatchType = "EXTREME_AMOUNT"; Description = "Amount outside expected range"; ShouldCancel = true }
+        else
+            { IsMismatch = false; MismatchType = ""; Description = ""; ShouldCancel = false }
+    
+    /// Validates currency against region and amount expectations
+    let validateCurrencyContext (currency: string) (amount: decimal) : MismatchResult =
+        match currency with
+        | "BRL" when amount > 50000m ->
+            { IsMismatch = true; MismatchType = "CURRENCY_AMOUNT_MISMATCH"; Description = "BRL amount exceeds typical transaction limits"; ShouldCancel = false }
+        | "USD" | "EUR" ->
+            { IsMismatch = true; MismatchType = "UNSUPPORTED_CURRENCY"; Description = "Currency not supported in this region"; ShouldCancel = true }
+        | cur when String.IsNullOrEmpty(cur) ->
+            { IsMismatch = true; MismatchType = "MISSING_CURRENCY"; Description = "Currency field is empty"; ShouldCancel = true }
+        | cur when cur.Length <> 3 ->
+            { IsMismatch = true; MismatchType = "INVALID_CURRENCY_FORMAT"; Description = "Currency code must be 3 characters"; ShouldCancel = true }
+        | _ ->
+            { IsMismatch = false; MismatchType = ""; Description = ""; ShouldCancel = false }
+    
+    /// Validates transaction ID patterns for potential issues
+    let validateTransactionIdPatterns (transactionId: string) : MismatchResult =
+        if String.IsNullOrEmpty(transactionId) then
+            { IsMismatch = true; MismatchType = "MISSING_TRANSACTION_ID"; Description = "Transaction ID is missing"; ShouldCancel = true }
+        elif Regex.IsMatch(transactionId, @"^(test|demo|sample|fake)", RegexOptions.IgnoreCase) then
+            { IsMismatch = true; MismatchType = "TEST_TRANSACTION_ID"; Description = "Transaction ID appears to be a test transaction"; ShouldCancel = true }
+        elif Regex.IsMatch(transactionId, @"^(\d)\1{5,}") then
+            { IsMismatch = true; MismatchType = "PATTERN_TRANSACTION_ID"; Description = "Transaction ID contains suspicious repeating patterns"; ShouldCancel = true }
+        elif transactionId.Length < 5 then
+            { IsMismatch = true; MismatchType = "SHORT_TRANSACTION_ID"; Description = "Transaction ID is too short for security"; ShouldCancel = true }
+        elif not (Regex.IsMatch(transactionId, @"^[a-zA-Z0-9\-_]+$")) then
+            { IsMismatch = true; MismatchType = "INVALID_TRANSACTION_ID_CHARS"; Description = "Transaction ID contains invalid characters"; ShouldCancel = true }
+        else
+            { IsMismatch = false; MismatchType = ""; Description = ""; ShouldCancel = false }
+    
+    /// Validates timestamp for business logic consistency
+    let validateTimestampLogic (timestamp: string) (currentTime: DateTime) : MismatchResult =
+        match DateTime.TryParse(timestamp) with
+        | false, _ ->
+            { IsMismatch = true; MismatchType = "INVALID_TIMESTAMP"; Description = "Timestamp format is invalid"; ShouldCancel = true }
+        | true, parsedTime ->
+            let timeDiff = currentTime - parsedTime.ToUniversalTime()
+            
+            if timeDiff.TotalDays > 30 then
+                { IsMismatch = true; MismatchType = "OLD_TIMESTAMP"; Description = "Transaction timestamp is too old"; ShouldCancel = true }
+            elif timeDiff.TotalHours < -24 then
+                { IsMismatch = true; MismatchType = "FUTURE_TIMESTAMP"; Description = "Transaction timestamp is too far in the future"; ShouldCancel = true }
+            elif parsedTime.DayOfWeek = DayOfWeek.Sunday && parsedTime.Hour < 6 then
+                { IsMismatch = true; MismatchType = "UNUSUAL_TIMING"; Description = "Transaction at unusual time (early Sunday)"; ShouldCancel = false }
+            else
+                { IsMismatch = false; MismatchType = ""; Description = ""; ShouldCancel = false }
+    
+    /// Cross-field validation for data consistency
+    let validateCrossFieldConsistency (payload: WebhookPayload) : MismatchResult =
+        // Check if transaction ID and amount have related patterns
+        let txIdLower = payload.TransactionId.ToLower()
+        let amountStr = payload.Amount.ToString("F2")
+        
+        if txIdLower.Contains("refund") && payload.Event = "payment_success" then
+            { IsMismatch = true; MismatchType = "EVENT_ID_MISMATCH"; Description = "Transaction ID suggests refund but event is payment_success"; ShouldCancel = true }
+        elif txIdLower.Contains("cancel") && payload.Event = "payment_success" then
+            { IsMismatch = true; MismatchType = "EVENT_ID_MISMATCH"; Description = "Transaction ID suggests cancellation but event is payment_success"; ShouldCancel = true }
+        elif payload.Amount = 0m && payload.Event = "payment_success" then
+            { IsMismatch = true; MismatchType = "AMOUNT_EVENT_MISMATCH"; Description = "Zero amount with payment_success event"; ShouldCancel = true }
+        elif amountStr.Contains(payload.TransactionId.[..2]) then
+            { IsMismatch = true; MismatchType = "SUSPICIOUS_CORRELATION"; Description = "Suspicious correlation between transaction ID and amount"; ShouldCancel = false }
+        else
+            { IsMismatch = false; MismatchType = ""; Description = ""; ShouldCancel = false }
+    
+    /// Business rule validation for payment processing
+    let validateBusinessRules (payload: WebhookPayload) : MismatchResult =
+        let currentHour = DateTime.UtcNow.Hour
+        
+        // Business hours validation (example: 6 AM to 11 PM UTC)
+        if currentHour < 6 || currentHour > 23 then
+            if payload.Amount > 1000m then
+                { IsMismatch = true; MismatchType = "OFF_HOURS_HIGH_AMOUNT"; Description = "High amount transaction outside business hours"; ShouldCancel = false }
+            else
+                { IsMismatch = false; MismatchType = ""; Description = ""; ShouldCancel = false }
+        // Weekend high-value transaction validation
+        elif DateTime.UtcNow.DayOfWeek = DayOfWeek.Saturday || DateTime.UtcNow.DayOfWeek = DayOfWeek.Sunday then
+            if payload.Amount > 5000m then
+                { IsMismatch = true; MismatchType = "WEEKEND_HIGH_AMOUNT"; Description = "High amount transaction on weekend"; ShouldCancel = false }
+            else
+                { IsMismatch = false; MismatchType = ""; Description = ""; ShouldCancel = false }
+        else
+            { IsMismatch = false; MismatchType = ""; Description = ""; ShouldCancel = false }
+    
+    /// Comprehensive data mismatch detection
+    let detectDataMismatches (payload: WebhookPayload) : MismatchResult list =
+        let currentTime = DateTime.UtcNow
+        
+        [
+            detectSuspiciousAmountPatterns payload.Amount
+            validateCurrencyContext payload.Currency payload.Amount
+            validateTransactionIdPatterns payload.TransactionId
+            validateTimestampLogic payload.Timestamp currentTime
+            validateCrossFieldConsistency payload
+            validateBusinessRules payload
+        ]
+        |> List.filter (fun result -> result.IsMismatch)
+    
+    /// Determines if transaction should be cancelled based on mismatches
+    let shouldCancelTransaction (mismatches: MismatchResult list) : bool * string =
+        let criticalMismatches = mismatches |> List.filter (fun m -> m.ShouldCancel)
+        
+        if criticalMismatches.Length > 0 then
+            let reasons = criticalMismatches |> List.map (fun m -> m.Description) |> String.concat "; "
+            (true, $"Critical data mismatches detected: {reasons}")
+        elif mismatches.Length >= 3 then
+            let reasons = mismatches |> List.map (fun m -> m.Description) |> String.concat "; "
+            (true, $"Multiple data mismatches detected: {reasons}")
+        else
+            (false, "")
+    
+    /// Creates a detailed audit log for mismatch detection
+    let createMismatchAuditLog (payload: WebhookPayload) (mismatches: MismatchResult list) (shouldCancel: bool) : string =
+        let timestamp = DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss")
+        let status = if shouldCancel then "CANCEL" else if mismatches.Length > 0 then "WARNING" else "PASS"
+        
+        let mismatchSummary = 
+            if mismatches.Length = 0 then "No mismatches detected"
+            else 
+                mismatches 
+                |> List.map (fun m -> $"{m.MismatchType}({m.Description})")
+                |> String.concat ", "
+        
+        $"[{timestamp}] DATA_MISMATCH {status}: TxID={payload.TransactionId}, Amount={payload.Amount}, " +
+        $"Currency={payload.Currency}, Mismatches=[{mismatchSummary}]"

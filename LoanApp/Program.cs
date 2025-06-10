@@ -127,6 +127,30 @@ app.MapPost("/webhook", async (HttpContext context) =>
             return Results.BadRequest(new { error = errorMessage });
         }
 
+        // NEW: Data Mismatch Detection
+        var mismatches = LoanRules.DataMismatch.detectDataMismatches(payload);
+        var mismatchArray = Microsoft.FSharp.Collections.ListModule.ToArray(mismatches);
+        var mismatchList = Microsoft.FSharp.Collections.ListModule.OfArray(mismatchArray);
+
+        var (shouldCancel, cancelReason) = LoanRules.DataMismatch.shouldCancelTransaction(mismatchList);
+        var auditLog = LoanRules.DataMismatch.createMismatchAuditLog(payload, mismatchList, shouldCancel);
+
+        app.Logger.LogInformation($"DATA_MISMATCH_AUDIT: {auditLog}");
+
+        if (shouldCancel)
+        {
+            app.Logger.LogWarning($"Data mismatch detected - cancelling transaction: {cancelReason}");
+            await SimulateCancellationRequest(payload.TransactionId);
+            return Results.BadRequest(new { error = $"Transaction cancelled: {cancelReason}" });
+        }
+
+        // Log warnings for non-critical mismatches
+        if (mismatchArray.Length > 0 && !shouldCancel)
+        {
+            var warningTypes = string.Join(", ", mismatchArray.Select(m => m.MismatchType));
+            app.Logger.LogWarning($"Non-critical data mismatches detected for {payload.TransactionId}: {warningTypes}");
+        }
+
         // Payload integrity validation
         var signatureOption = string.IsNullOrEmpty(signature) ? null : FSharpOption<string>.Some(signature);
         var integrityResult = LoanRules.Integrity.validatePayloadIntegrity(payload, json, signatureOption, WEBHOOK_SECRET);
@@ -296,6 +320,70 @@ app.MapPost("/clear-nonce-cache", (HttpContext context) =>
         message = "Nonce cache cleared",
         cleared_count = clearedCount
     });
+});
+
+// NEW: Endpoint to test data mismatch detection
+app.MapPost("/test-mismatch", async (HttpContext context) =>
+{
+    using var reader = new StreamReader(context.Request.Body);
+    var json = await reader.ReadToEndAsync();
+
+    if (string.IsNullOrEmpty(json))
+    {
+        return Results.BadRequest(new { error = "Empty payload" });
+    }
+
+    try
+    {
+        var options = new JsonSerializerOptions
+        {
+            PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
+            PropertyNameCaseInsensitive = true,
+            NumberHandling = JsonNumberHandling.AllowReadingFromString
+        };
+
+        var payloadDto = JsonSerializer.Deserialize<WebhookPayloadDto>(json, options);
+
+        if (payloadDto == null)
+        {
+            return Results.BadRequest(new { error = "Invalid JSON" });
+        }
+
+        var payload = new Types.WebhookPayload(
+            payloadDto.Event,
+            payloadDto.TransactionId,
+            payloadDto.Amount,
+            payloadDto.Currency,
+            payloadDto.Timestamp
+        );
+
+        // Detect mismatches without processing transaction
+        var mismatches = LoanRules.DataMismatch.detectDataMismatches(payload);
+        var mismatchArray = Microsoft.FSharp.Collections.ListModule.ToArray(mismatches);
+        var mismatchList = Microsoft.FSharp.Collections.ListModule.OfArray(mismatchArray);
+
+        var (shouldCancel, cancelReason) = LoanRules.DataMismatch.shouldCancelTransaction(mismatchList);
+        var auditLog = LoanRules.DataMismatch.createMismatchAuditLog(payload, mismatchList, shouldCancel);
+
+        return Results.Ok(new
+        {
+            transaction_id = payload.TransactionId,
+            mismatches_detected = mismatchArray.Length,
+            should_cancel = shouldCancel,
+            cancel_reason = cancelReason,
+            audit_log = auditLog,
+            mismatch_details = mismatchArray.Select(m => new
+            {
+                type = m.MismatchType,
+                description = m.Description,
+                should_cancel = m.ShouldCancel
+            }).ToArray()
+        });
+    }
+    catch (Exception ex)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
 });
 
 // Simulate sending confirmation to an external service
