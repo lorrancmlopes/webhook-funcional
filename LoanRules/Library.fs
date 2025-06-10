@@ -28,6 +28,38 @@ module Types =
         Description: string
         ShouldCancel: bool
     }
+    
+    /// Confirmation status enumeration
+    type ConfirmationStatus =
+        | Pending
+        | Confirmed
+        | Failed
+        | Retrying
+        | Cancelled
+        | Expired
+    
+    /// Confirmation attempt record
+    type ConfirmationAttempt = {
+        AttemptNumber: int
+        Timestamp: System.DateTime
+        Success: bool
+        ErrorMessage: string option
+        ResponseTime: System.TimeSpan option
+    }
+    
+    /// Comprehensive confirmation record
+    type ConfirmationRecord = {
+        TransactionId: string
+        Status: ConfirmationStatus
+        CreatedAt: System.DateTime
+        LastUpdated: System.DateTime
+        Attempts: ConfirmationAttempt list
+        MaxRetries: int
+        RetryInterval: System.TimeSpan
+        ExpiresAt: System.DateTime
+        ConfirmationData: Map<string, string>
+        OriginalPayload: WebhookPayload
+    }
 
 /// Module for validating webhook payloads
 module Validation =
@@ -406,3 +438,179 @@ module DataMismatch =
         
         $"[{timestamp}] DATA_MISMATCH {status}: TxID={payload.TransactionId}, Amount={payload.Amount}, " +
         $"Currency={payload.Currency}, Mismatches=[{mismatchSummary}]"
+
+/// Module for transaction confirmation management
+module Confirmation =
+    open System
+    open Types
+    
+    /// Creates a new confirmation record
+    let createConfirmationRecord (payload: WebhookPayload) (maxRetries: int) (retryInterval: TimeSpan) : ConfirmationRecord =
+        let now = DateTime.UtcNow
+        {
+            TransactionId = payload.TransactionId
+            Status = Pending
+            CreatedAt = now
+            LastUpdated = now
+            Attempts = []
+            MaxRetries = maxRetries
+            RetryInterval = retryInterval
+            ExpiresAt = now.AddHours(24.0)  // 24-hour expiration
+            ConfirmationData = Map.empty
+            OriginalPayload = payload
+        }
+    
+    /// Validates confirmation data completeness
+    let validateConfirmationData (payload: WebhookPayload) : Result<WebhookPayload, string> =
+        if String.IsNullOrEmpty(payload.TransactionId) then
+            Error "Transaction ID is required for confirmation"
+        elif payload.Amount <= 0m then
+            Error "Valid amount is required for confirmation"
+        elif String.IsNullOrEmpty(payload.Currency) then
+            Error "Currency is required for confirmation"
+        elif String.IsNullOrEmpty(payload.Event) then
+            Error "Event type is required for confirmation"
+        else
+            Ok payload
+    
+    /// Determines if confirmation should be retried
+    let shouldRetryConfirmation (record: ConfirmationRecord) : bool =
+        let now = DateTime.UtcNow
+        let hasRetriesLeft = record.Attempts.Length < record.MaxRetries
+        let notExpired = now < record.ExpiresAt
+        let canRetryStatus = record.Status = Failed || record.Status = Retrying
+        
+        hasRetriesLeft && notExpired && canRetryStatus
+    
+    /// Calculates next retry time
+    let getNextRetryTime (record: ConfirmationRecord) : DateTime option =
+        if shouldRetryConfirmation record then
+            let lastAttempt = record.Attempts |> List.tryHead
+            match lastAttempt with
+            | Some attempt -> Some (attempt.Timestamp.Add(record.RetryInterval))
+            | None -> Some (DateTime.UtcNow.Add(record.RetryInterval))
+        else
+            None
+    
+    /// Creates a confirmation attempt record
+    let createConfirmationAttempt (attemptNumber: int) (success: bool) (errorMessage: string option) (responseTime: TimeSpan option) : ConfirmationAttempt =
+        {
+            AttemptNumber = attemptNumber
+            Timestamp = DateTime.UtcNow
+            Success = success
+            ErrorMessage = errorMessage
+            ResponseTime = responseTime
+        }
+    
+    /// Updates confirmation record with new attempt
+    let updateConfirmationRecord (record: ConfirmationRecord) (attempt: ConfirmationAttempt) : ConfirmationRecord =
+        let newStatus = 
+            if attempt.Success then Confirmed
+            elif shouldRetryConfirmation record then Retrying
+            else Failed
+        
+        {
+            record with
+                Status = newStatus
+                LastUpdated = DateTime.UtcNow
+                Attempts = attempt :: record.Attempts
+        }
+    
+    /// Validates confirmation response
+    let validateConfirmationResponse (responseStatus: int) (responseBody: string option) : bool * string option =
+        match responseStatus with
+        | 200 | 201 | 202 -> (true, None)
+        | 400 -> (false, Some "Bad request - invalid confirmation data")
+        | 401 -> (false, Some "Unauthorized - authentication failed")
+        | 403 -> (false, Some "Forbidden - access denied")
+        | 404 -> (false, Some "Not found - confirmation endpoint unavailable")
+        | 409 -> (false, Some "Conflict - transaction already confirmed")
+        | 422 -> (false, Some "Unprocessable entity - validation failed")
+        | 429 -> (false, Some "Rate limited - too many requests")
+        | 500 | 502 | 503 | 504 -> (false, Some "Server error - temporary failure, will retry")
+        | _ -> (false, Some $"Unexpected response status: {responseStatus}")
+    
+    /// Generates confirmation payload for external service
+    let generateConfirmationPayload (payload: WebhookPayload) (confirmationId: string) : Map<string, obj> =
+        Map [
+            ("transaction_id", payload.TransactionId :> obj)
+            ("amount", payload.Amount :> obj)
+            ("currency", payload.Currency :> obj)
+            ("event", payload.Event :> obj)
+            ("timestamp", payload.Timestamp :> obj)
+            ("confirmation_id", confirmationId :> obj)
+            ("confirmed_at", DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ") :> obj)
+            ("status", "confirmed" :> obj)
+        ]
+    
+    /// Calculates confirmation metrics
+    let calculateConfirmationMetrics (record: ConfirmationRecord) : Map<string, obj> =
+        let totalAttempts = record.Attempts.Length
+        let successfulAttempts = record.Attempts |> List.filter (fun a -> a.Success) |> List.length
+        let avgResponseTime = 
+            record.Attempts 
+            |> List.choose (fun a -> a.ResponseTime)
+            |> fun times -> 
+                if times.Length > 0 then 
+                    times |> List.averageBy (fun t -> t.TotalMilliseconds) |> Some
+                else None
+        
+        let timeSinceCreation = DateTime.UtcNow - record.CreatedAt
+        let timeToConfirmation = 
+            record.Attempts 
+            |> List.tryFind (fun a -> a.Success)
+            |> Option.map (fun a -> a.Timestamp - record.CreatedAt)
+        
+        Map [
+            ("total_attempts", totalAttempts :> obj)
+            ("successful_attempts", successfulAttempts :> obj)
+            ("success_rate", (float successfulAttempts / float totalAttempts * 100.0) :> obj)
+            ("avg_response_time_ms", avgResponseTime :> obj)
+            ("time_since_creation_ms", timeSinceCreation.TotalMilliseconds :> obj)
+            ("time_to_confirmation_ms", timeToConfirmation |> Option.map (fun t -> t.TotalMilliseconds) :> obj)
+            ("expires_in_ms", (record.ExpiresAt - DateTime.UtcNow).TotalMilliseconds :> obj)
+        ]
+    
+    /// Creates audit log entry for confirmation
+    let createConfirmationAuditLog (record: ConfirmationRecord) (attempt: ConfirmationAttempt option) : string =
+        let timestamp = DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss")
+        let statusText = record.Status.ToString().ToUpperInvariant()
+        
+        let attemptInfo = 
+            match attempt with
+            | Some att -> $", Attempt={att.AttemptNumber}, Success={att.Success}"
+            | None -> ""
+        
+        let responseTimeInfo =
+            attempt 
+            |> Option.bind (fun a -> a.ResponseTime)
+            |> Option.map (fun rt -> $", ResponseTime={rt.TotalMilliseconds:F0}ms")
+            |> Option.defaultValue ""
+        
+        let errorInfo =
+            attempt
+            |> Option.bind (fun a -> a.ErrorMessage)
+            |> Option.map (fun err -> $", Error={err}")
+            |> Option.defaultValue ""
+        
+        $"[{timestamp}] CONFIRMATION {statusText}: TxID={record.TransactionId}, " +
+        $"Amount={record.OriginalPayload.Amount}, TotalAttempts={record.Attempts.Length}" +
+        $"{attemptInfo}{responseTimeInfo}{errorInfo}"
+    
+    /// Determines if confirmation has expired
+    let isConfirmationExpired (record: ConfirmationRecord) : bool =
+        DateTime.UtcNow >= record.ExpiresAt
+    
+    /// Gets confirmation summary
+    let getConfirmationSummary (record: ConfirmationRecord) : Map<string, obj> =
+        Map [
+            ("transaction_id", record.TransactionId :> obj)
+            ("status", record.Status.ToString() :> obj)
+            ("created_at", record.CreatedAt.ToString("yyyy-MM-ddTHH:mm:ssZ") :> obj)
+            ("last_updated", record.LastUpdated.ToString("yyyy-MM-ddTHH:mm:ssZ") :> obj)
+            ("expires_at", record.ExpiresAt.ToString("yyyy-MM-ddTHH:mm:ssZ") :> obj)
+            ("total_attempts", record.Attempts.Length :> obj)
+            ("can_retry", shouldRetryConfirmation record :> obj)
+            ("is_expired", isConfirmationExpired record :> obj)
+            ("next_retry", getNextRetryTime record |> Option.map (fun t -> t.ToString("yyyy-MM-ddTHH:mm:ssZ")) :> obj)
+        ]

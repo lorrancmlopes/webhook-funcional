@@ -2,6 +2,71 @@
 <doc>
 <assembly><name>LoanRules</name></assembly>
 <members>
+<member name="M:LoanRules.Confirmation.getConfirmationSummary(LoanRules.Types.ConfirmationRecord)">
+<summary>
+ Gets confirmation summary
+</summary>
+</member>
+<member name="M:LoanRules.Confirmation.isConfirmationExpired(LoanRules.Types.ConfirmationRecord)">
+<summary>
+ Determines if confirmation has expired
+</summary>
+</member>
+<member name="M:LoanRules.Confirmation.createConfirmationAuditLog(LoanRules.Types.ConfirmationRecord,Microsoft.FSharp.Core.FSharpOption{LoanRules.Types.ConfirmationAttempt})">
+<summary>
+ Creates audit log entry for confirmation
+</summary>
+</member>
+<member name="M:LoanRules.Confirmation.calculateConfirmationMetrics(LoanRules.Types.ConfirmationRecord)">
+<summary>
+ Calculates confirmation metrics
+</summary>
+</member>
+<member name="M:LoanRules.Confirmation.generateConfirmationPayload(LoanRules.Types.WebhookPayload,System.String)">
+<summary>
+ Generates confirmation payload for external service
+</summary>
+</member>
+<member name="M:LoanRules.Confirmation.validateConfirmationResponse(System.Int32,Microsoft.FSharp.Core.FSharpOption{System.String})">
+<summary>
+ Validates confirmation response
+</summary>
+</member>
+<member name="M:LoanRules.Confirmation.updateConfirmationRecord(LoanRules.Types.ConfirmationRecord,LoanRules.Types.ConfirmationAttempt)">
+<summary>
+ Updates confirmation record with new attempt
+</summary>
+</member>
+<member name="M:LoanRules.Confirmation.createConfirmationAttempt(System.Int32,System.Boolean,Microsoft.FSharp.Core.FSharpOption{System.String},Microsoft.FSharp.Core.FSharpOption{System.TimeSpan})">
+<summary>
+ Creates a confirmation attempt record
+</summary>
+</member>
+<member name="M:LoanRules.Confirmation.getNextRetryTime(LoanRules.Types.ConfirmationRecord)">
+<summary>
+ Calculates next retry time
+</summary>
+</member>
+<member name="M:LoanRules.Confirmation.shouldRetryConfirmation(LoanRules.Types.ConfirmationRecord)">
+<summary>
+ Determines if confirmation should be retried
+</summary>
+</member>
+<member name="M:LoanRules.Confirmation.validateConfirmationData(LoanRules.Types.WebhookPayload)">
+<summary>
+ Validates confirmation data completeness
+</summary>
+</member>
+<member name="M:LoanRules.Confirmation.createConfirmationRecord(LoanRules.Types.WebhookPayload,System.Int32,System.TimeSpan)">
+<summary>
+ Creates a new confirmation record
+</summary>
+</member>
+<member name="T:LoanRules.Confirmation">
+<summary>
+ Module for transaction confirmation management
+</summary>
+</member>
 <member name="M:LoanRules.DataMismatch.createMismatchAuditLog(LoanRules.Types.WebhookPayload,Microsoft.FSharp.Collections.FSharpList{LoanRules.Types.MismatchResult},System.Boolean)">
 <summary>
  Creates a detailed audit log for mismatch detection
@@ -170,6 +235,21 @@
 <member name="T:LoanRules.Validation">
 <summary>
  Module for validating webhook payloads
+</summary>
+</member>
+<member name="T:LoanRules.Types.ConfirmationRecord">
+<summary>
+ Comprehensive confirmation record
+</summary>
+</member>
+<member name="T:LoanRules.Types.ConfirmationAttempt">
+<summary>
+ Confirmation attempt record
+</summary>
+</member>
+<member name="T:LoanRules.Types.ConfirmationStatus">
+<summary>
+ Confirmation status enumeration
 </summary>
 </member>
 <member name="T:LoanRules.Types.MismatchResult">

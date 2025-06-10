@@ -17,8 +17,16 @@ var processedTransactionIds = new ConcurrentHashSet<string>();
 // NEW: In-memory storage for used nonces to prevent replay attacks
 var usedNonces = new ConcurrentHashSet<string>();
 
+// NEW: In-memory storage for confirmation tracking
+var confirmationRecords = new ConcurrentDictionary<string, Types.ConfirmationRecord>();
+
 // Configuration for integrity validation
 const string WEBHOOK_SECRET = "webhook-secret-key-2025";
+
+// NEW: Configuration for confirmation system
+const int MAX_CONFIRMATION_RETRIES = 3;
+var CONFIRMATION_RETRY_INTERVAL = TimeSpan.FromSeconds(30);
+const string CONFIRMATION_ENDPOINT = "http://localhost:5001/confirmar";
 
 // NEW: Configuration for authenticity validation
 var trustedIPs = new List<string> { "127.0.0.1", "::1", "localhost" }; // For testing
@@ -221,9 +229,17 @@ app.MapPost("/webhook", async (HttpContext context) =>
             return Results.BadRequest(new { error = "Duplicate transaction ID" });
         }
 
-        // Process valid transaction - send confirmation and return 200
-        app.Logger.LogInformation($"Valid transaction processed: {payload.TransactionId} - sending confirmation");
-        await SimulateConfirmationRequest(payload.TransactionId);
+        // Process valid transaction - initialize enhanced confirmation system
+        app.Logger.LogInformation($"Valid transaction processed: {payload.TransactionId} - initializing confirmation");
+
+        // Create confirmation record using F# function
+        var confirmationRecord = LoanRules.Confirmation.createConfirmationRecord(payload, MAX_CONFIRMATION_RETRIES, CONFIRMATION_RETRY_INTERVAL);
+
+        // Store confirmation record for tracking
+        confirmationRecords.TryAdd(payload.TransactionId, confirmationRecord);
+
+        // Attempt initial confirmation
+        var confirmationResult = await AttemptTransactionConfirmation(payload, confirmationRecord);
 
         return Results.Ok(new
         {
@@ -232,7 +248,10 @@ app.MapPost("/webhook", async (HttpContext context) =>
             integrity_validated = signature != null,
             authenticity_validated = ENABLE_AUTHENTICITY_CHECKS,
             nonce_provided = !string.IsNullOrEmpty(nonce),
-            request_id = requestId
+            request_id = requestId,
+            confirmation_status = confirmationResult.Item1.ToString(),
+            confirmation_initiated = true,
+            confirmation_attempts = confirmationResult.Item2
         });
     }
     catch (Exception ex)
@@ -386,33 +405,107 @@ app.MapPost("/test-mismatch", async (HttpContext context) =>
     }
 });
 
-// Simulate sending confirmation to an external service
-async Task SimulateConfirmationRequest(string transactionId)
+// Enhanced confirmation system with retry logic and tracking
+async Task<(Types.ConfirmationStatus, int)> AttemptTransactionConfirmation(Types.WebhookPayload payload, Types.ConfirmationRecord record)
 {
-    app.Logger.LogInformation($"Sending confirmation POST for transaction {transactionId}");
+    var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+    var attemptNumber = record.Attempts.Length + 1;
+
+    app.Logger.LogInformation($"Attempting confirmation #{attemptNumber} for transaction {payload.TransactionId}");
 
     try
     {
-        var confirmationData = new
+        // Validate confirmation data
+        var validationResult = LoanRules.Confirmation.validateConfirmationData(payload);
+        if (validationResult.IsError)
         {
-            transaction_id = transactionId
-        };
+            var errorAttempt = LoanRules.Confirmation.createConfirmationAttempt(attemptNumber, false,
+                FSharpOption<string>.Some($"Validation failed: {validationResult.ErrorValue}"), null);
+            var updatedRecord = LoanRules.Confirmation.updateConfirmationRecord(record, errorAttempt);
+            confirmationRecords.TryUpdate(payload.TransactionId, updatedRecord, record);
+
+            var auditLog = LoanRules.Confirmation.createConfirmationAuditLog(updatedRecord, FSharpOption<Types.ConfirmationAttempt>.Some(errorAttempt));
+            app.Logger.LogWarning($"CONFIRMATION_AUDIT: {auditLog}");
+
+            return (updatedRecord.Status, attemptNumber);
+        }
+
+        // Generate confirmation payload
+        var confirmationId = Guid.NewGuid().ToString();
+        var confirmationPayload = LoanRules.Confirmation.generateConfirmationPayload(payload, confirmationId);
+
+        // Convert F# Map to C# dictionary for serialization
+        var payloadDict = new Dictionary<string, object>();
+        foreach (var kvp in confirmationPayload)
+        {
+            payloadDict[kvp.Key] = kvp.Value;
+        }
 
         var content = new StringContent(
-            JsonSerializer.Serialize(confirmationData),
+            JsonSerializer.Serialize(payloadDict),
             System.Text.Encoding.UTF8,
             "application/json");
 
-        var response = await httpClient.PostAsync("http://localhost:5001/confirmar", content);
-        app.Logger.LogInformation($"Confirmation sent - Status: {response.StatusCode}");
+        var response = await httpClient.PostAsync(CONFIRMATION_ENDPOINT, content);
+        stopwatch.Stop();
+
+        var responseTime = FSharpOption<System.TimeSpan>.Some(stopwatch.Elapsed);
+        var responseBody = await response.Content.ReadAsStringAsync();
+
+        // Validate response using F# function
+        var (isSuccess, errorMessage) = LoanRules.Confirmation.validateConfirmationResponse((int)response.StatusCode,
+            string.IsNullOrEmpty(responseBody) ? null : FSharpOption<string>.Some(responseBody));
+
+        // Create attempt record
+        var attempt = LoanRules.Confirmation.createConfirmationAttempt(attemptNumber, isSuccess,
+            Microsoft.FSharp.Core.FSharpOption<string>.get_IsSome(errorMessage) ? errorMessage : null, responseTime);
+
+        // Update confirmation record
+        var finalRecord = LoanRules.Confirmation.updateConfirmationRecord(record, attempt);
+        confirmationRecords.TryUpdate(payload.TransactionId, finalRecord, record);
+
+        // Create audit log
+        var finalAuditLog = LoanRules.Confirmation.createConfirmationAuditLog(finalRecord, FSharpOption<Types.ConfirmationAttempt>.Some(attempt));
+        app.Logger.LogInformation($"CONFIRMATION_AUDIT: {finalAuditLog}");
+
+        // Schedule retry if needed
+        if (!isSuccess && LoanRules.Confirmation.shouldRetryConfirmation(finalRecord))
+        {
+            var nextRetryTime = LoanRules.Confirmation.getNextRetryTime(finalRecord);
+            if (Microsoft.FSharp.Core.FSharpOption<System.DateTime>.get_IsSome(nextRetryTime))
+            {
+                app.Logger.LogInformation($"Scheduling confirmation retry for {payload.TransactionId} at {nextRetryTime.Value}");
+                // In a real application, you would schedule this with a background service
+                _ = Task.Delay(CONFIRMATION_RETRY_INTERVAL).ContinueWith(async _ =>
+                {
+                    if (confirmationRecords.TryGetValue(payload.TransactionId, out var currentRecord))
+                    {
+                        await AttemptTransactionConfirmation(payload, currentRecord);
+                    }
+                });
+            }
+        }
+
+        return (finalRecord.Status, attemptNumber);
     }
     catch (Exception ex)
     {
-        app.Logger.LogError(ex, "Error sending confirmation request");
+        stopwatch.Stop();
+        var responseTime = FSharpOption<System.TimeSpan>.Some(stopwatch.Elapsed);
+        var errorAttempt = LoanRules.Confirmation.createConfirmationAttempt(attemptNumber, false,
+            FSharpOption<string>.Some(ex.Message), responseTime);
+
+        var errorRecord = LoanRules.Confirmation.updateConfirmationRecord(record, errorAttempt);
+        confirmationRecords.TryUpdate(payload.TransactionId, errorRecord, record);
+
+        var errorAuditLog = LoanRules.Confirmation.createConfirmationAuditLog(errorRecord, FSharpOption<Types.ConfirmationAttempt>.Some(errorAttempt));
+        app.Logger.LogError($"CONFIRMATION_AUDIT: {errorAuditLog}");
+
+        return (errorRecord.Status, attemptNumber);
     }
 }
 
-// Simulate sending cancellation to an external service
+// Legacy confirmation method for cancellations (simplified)
 async Task SimulateCancellationRequest(string transactionId)
 {
     app.Logger.LogInformation($"Sending cancellation POST for transaction {transactionId}");
@@ -421,7 +514,9 @@ async Task SimulateCancellationRequest(string transactionId)
     {
         var cancellationData = new
         {
-            transaction_id = transactionId
+            transaction_id = transactionId,
+            status = "cancelled",
+            cancelled_at = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")
         };
 
         var content = new StringContent(
@@ -438,12 +533,125 @@ async Task SimulateCancellationRequest(string transactionId)
     }
 }
 
+// NEW: Endpoint to get confirmation status
+app.MapGet("/confirmation/{transactionId}", (string transactionId) =>
+{
+    if (confirmationRecords.TryGetValue(transactionId, out var record))
+    {
+        var summary = LoanRules.Confirmation.getConfirmationSummary(record);
+        var metrics = LoanRules.Confirmation.calculateConfirmationMetrics(record);
+
+        // Convert F# Maps to C# dictionaries for JSON serialization
+        var summaryDict = summary.ToDictionary(kvp => kvp.Key, kvp => kvp.Value);
+        var metricsDict = metrics.ToDictionary(kvp => kvp.Key, kvp => kvp.Value);
+
+        return Results.Ok(new
+        {
+            summary = summaryDict,
+            metrics = metricsDict,
+            attempts = record.Attempts.Select(attempt => new
+            {
+                attempt_number = attempt.AttemptNumber,
+                timestamp = attempt.Timestamp.ToString("yyyy-MM-ddTHH:mm:ssZ"),
+                success = attempt.Success,
+                error_message = Microsoft.FSharp.Core.FSharpOption<string>.get_IsSome(attempt.ErrorMessage) ? attempt.ErrorMessage.Value : null,
+                response_time_ms = Microsoft.FSharp.Core.FSharpOption<System.TimeSpan>.get_IsSome(attempt.ResponseTime) ? (double?)attempt.ResponseTime.Value.TotalMilliseconds : null
+            }).ToArray()
+        });
+    }
+    else
+    {
+        return Results.NotFound(new { error = "Confirmation record not found" });
+    }
+});
+
+// NEW: Endpoint to manually retry confirmation
+app.MapPost("/confirmation/{transactionId}/retry", async (string transactionId) =>
+{
+    if (confirmationRecords.TryGetValue(transactionId, out var record))
+    {
+        if (LoanRules.Confirmation.shouldRetryConfirmation(record))
+        {
+            var (status, attemptNumber) = await AttemptTransactionConfirmation(record.OriginalPayload, record);
+
+            return Results.Ok(new
+            {
+                message = "Retry attempt completed",
+                transaction_id = transactionId,
+                status = status.ToString(),
+                attempt_number = attemptNumber
+            });
+        }
+        else
+        {
+            return Results.BadRequest(new { error = "Cannot retry confirmation - max retries reached or already confirmed" });
+        }
+    }
+    else
+    {
+        return Results.NotFound(new { error = "Confirmation record not found" });
+    }
+});
+
+// NEW: Endpoint to list all confirmations
+app.MapGet("/confirmations", () =>
+{
+    var confirmations = confirmationRecords.Values.Select(record =>
+    {
+        var summary = LoanRules.Confirmation.getConfirmationSummary(record);
+        return summary.ToDictionary(kvp => kvp.Key, kvp => kvp.Value);
+    }).ToArray();
+
+    return Results.Ok(new
+    {
+        total_confirmations = confirmations.Length,
+        confirmations = confirmations
+    });
+});
+
+// NEW: Endpoint to get confirmation statistics
+app.MapGet("/confirmation-stats", () =>
+{
+    var allRecords = confirmationRecords.Values.ToArray();
+    var totalConfirmations = allRecords.Length;
+    var confirmedCount = allRecords.Count(r => r.Status == Types.ConfirmationStatus.Confirmed);
+    var failedCount = allRecords.Count(r => r.Status == Types.ConfirmationStatus.Failed);
+    var pendingCount = allRecords.Count(r => r.Status == Types.ConfirmationStatus.Pending);
+    var retryingCount = allRecords.Count(r => r.Status == Types.ConfirmationStatus.Retrying);
+
+    var totalAttempts = allRecords.Sum(r => r.Attempts.Length);
+    var avgAttemptsPerTransaction = totalConfirmations > 0 ? (double)totalAttempts / totalConfirmations : 0;
+
+    var successfulAttempts = allRecords.SelectMany(r => r.Attempts).Count(a => a.Success);
+    var overallSuccessRate = totalAttempts > 0 ? (double)successfulAttempts / totalAttempts * 100 : 0;
+
+    return Results.Ok(new
+    {
+        total_confirmations = totalConfirmations,
+        confirmed = confirmedCount,
+        failed = failedCount,
+        pending = pendingCount,
+        retrying = retryingCount,
+        success_rate = Math.Round(overallSuccessRate, 2),
+        avg_attempts_per_transaction = Math.Round(avgAttemptsPerTransaction, 2),
+        total_attempts = totalAttempts,
+        configuration = new
+        {
+            max_retries = MAX_CONFIRMATION_RETRIES,
+            retry_interval_seconds = CONFIRMATION_RETRY_INTERVAL.TotalSeconds,
+            confirmation_endpoint = CONFIRMATION_ENDPOINT
+        }
+    });
+});
+
 // Start the server
-app.Logger.LogInformation("Webhook server starting up with integrity and authenticity validation...");
+app.Logger.LogInformation("Webhook server starting up with comprehensive validation and confirmation system...");
 app.Logger.LogInformation($"HMAC secret configured: {WEBHOOK_SECRET[..10]}...");
 app.Logger.LogInformation($"Authenticity checks: {(ENABLE_AUTHENTICITY_CHECKS ? "ENABLED" : "DISABLED")}");
 app.Logger.LogInformation($"Strict timing: {(ENABLE_STRICT_TIMING ? "ENABLED" : "DISABLED")}");
 app.Logger.LogInformation($"Trusted IPs: {string.Join(", ", trustedIPs)}");
+app.Logger.LogInformation($"Confirmation system: ENABLED - Max retries: {MAX_CONFIRMATION_RETRIES}, Retry interval: {CONFIRMATION_RETRY_INTERVAL.TotalSeconds}s");
+app.Logger.LogInformation($"Confirmation endpoint: {CONFIRMATION_ENDPOINT}");
 app.Urls.Add("http://localhost:5000");
 app.Run();
 

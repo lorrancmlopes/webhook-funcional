@@ -11,7 +11,7 @@ print("=" * 50)
 print("\n1. Testing without signature:")
 payload1 = {
     "event": "payment_success",
-    "transaction_id": "test-integrity-123",
+    "transaction_id": "integrity-check-001",
     "amount": "99.99",
     "currency": "BRL",
     "timestamp": "2025-06-10T10:00:00Z"
@@ -30,7 +30,7 @@ print(f"Response: {response.text}")
 print("\n2. Testing with valid HMAC signature:")
 payload2 = {
     "event": "payment_success",
-    "transaction_id": "test-integrity-456",
+    "transaction_id": "integrity-check-002",
     "amount": "199.99",
     "currency": "BRL",
     "timestamp": "2025-06-10T10:00:00Z"
@@ -112,7 +112,7 @@ print(f"Response: {response.text}")
 print(f"\n6. Testing amount precision validation:")
 invalid_precision_payload = {
     "event": "payment_success",
-    "transaction_id": "test-precision-789",
+    "transaction_id": "precision-check-001",
     "amount": "99.999",  # Too many decimal places
     "currency": "BRL",
     "timestamp": "2025-06-10T10:00:00Z"

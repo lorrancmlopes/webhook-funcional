@@ -37,10 +37,10 @@ def run_server():
 # Carrega argumentos de linha de comando ou usa valores padrão
 async def load_args():
     event = sys.argv[1] if len(sys.argv) > 1 else "payment_success"
-    transaction_id = sys.argv[2] if len(sys.argv) > 2 else "abc123"
+    transaction_id = sys.argv[2] if len(sys.argv) > 2 else "payment-tx-001"
     amount = sys.argv[3] if len(sys.argv) > 3 else "49.90"
     currency = sys.argv[4] if len(sys.argv) > 4 else "BRL"
-    timestamp = sys.argv[5] if len(sys.argv) > 5 else "2023-10-01T12:00:00Z"
+    timestamp = sys.argv[5] if len(sys.argv) > 5 else "2025-06-10T12:00:00Z"
     token = sys.argv[6] if len(sys.argv) > 6 else "meu-token-secreto"
 
     url = "http://localhost:5000/webhook"  # URL do webhook a ser testado
