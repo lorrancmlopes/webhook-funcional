@@ -1,10 +1,10 @@
 # 🚀 Webhook Payment Confirmation Service
 
-A production-ready webhook payment confirmation service built with F# and C#, featuring comprehensive security validation, fraud detection, and database persistence.
+A webhook payment confirmation service built with F# and C#, featuring comprehensive security validation, fraud detection, and database persistence.
 
 ## 📋 Overview
 
-This project implements a robust webhook service for processing payment confirmations with advanced security features including HMAC signature validation, transaction authenticity verification, data mismatch detection, and automated confirmation retry mechanisms.
+This project implements a robust webhook service for processing payment confirmations with security features including HMAC signature validation, transaction authenticity verification, data mismatch detection, and automated confirmation retry mechanisms.
 
 ## ✨ Key Features
 
@@ -23,7 +23,7 @@ This project implements a robust webhook service for processing payment confirma
 
 ### 💾 Data Management
 - **SQLite Database**: Persistent transaction storage
-- **Entity Framework Core**: Modern ORM with migrations
+- **Entity Framework Core**: ORM with migrations
 - **Duplicate Prevention**: Database-backed transaction uniqueness
 - **Comprehensive Auditing**: Full transaction lifecycle tracking
 
@@ -31,7 +31,7 @@ This project implements a robust webhook service for processing payment confirma
 - **Automatic Retry Logic**: Configurable retry mechanisms
 - **Status Tracking**: Real-time confirmation monitoring
 - **Statistics Dashboard**: Performance analytics and metrics
-- **Error Handling**: Graceful failure management
+- **Error Handling**: Failure management
 
 ## 🛠️ Technology Stack
 
@@ -53,7 +53,7 @@ This project implements a robust webhook service for processing payment confirma
 
 1. **Clone the Repository**
    ```bash
-   git clone <repository-url>
+   git clone https://github.com/lorrancmlopes/webhook-funcional/
    cd webhook-funcional
    ```
 
@@ -211,8 +211,8 @@ User-Agent: <client-identifier>               # Optional for validation
 ┌─────────────────────────────────────────┐
 │     SQLite Database + Entity Framework  │
 │  • Transaction Records                  │
-│  • Audit Trails                        │
-│  • Confirmation Status                 │
+│  • Audit Trails                         │
+│  • Confirmation Status                  │
 └─────────────────────────────────────────┘
 ```
 
@@ -279,5 +279,14 @@ The application provides comprehensive logging:
 - Database operation logs
 - Error tracking and debugging
 
+## 🤖 Acknowledgments & AI Assistance
 
+This project was developed with the help of AI tools to accelerate and support the development process.
+
+* **AI assistance** was used to:
+
+  * Generate boilerplate code for the project structure.
+  * Draft and refine functional logic and C# API structure.
+  * Write commit messages that clearly describe changes.
+  * Create and format this `README.md` file.
 ---
