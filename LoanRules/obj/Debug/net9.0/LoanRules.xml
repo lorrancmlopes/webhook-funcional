@@ -2,6 +2,46 @@
 <doc>
 <assembly><name>LoanRules</name></assembly>
 <members>
+<member name="M:LoanRules.Integrity.validatePayloadIntegrity(LoanRules.Types.WebhookPayload,System.String,Microsoft.FSharp.Core.FSharpOption{System.String},System.String)">
+<summary>
+ Comprehensive integrity validation
+</summary>
+</member>
+<member name="M:LoanRules.Integrity.validateHmacSignature(System.String,Microsoft.FSharp.Core.FSharpOption{System.String},System.String)">
+<summary>
+ Validates HMAC signature if provided
+</summary>
+</member>
+<member name="M:LoanRules.Integrity.computeHmacSignature(System.String,System.String)">
+<summary>
+ Computes HMAC-SHA256 signature for payload integrity
+</summary>
+</member>
+<member name="M:LoanRules.Integrity.validatePayloadSize(System.String)">
+<summary>
+ Validates payload size constraints
+</summary>
+</member>
+<member name="M:LoanRules.Integrity.validateAmountPrecision(System.Decimal)">
+<summary>
+ Validates that the amount has reasonable precision (max 2 decimal places)
+</summary>
+</member>
+<member name="M:LoanRules.Integrity.validateTransactionIdFormat(System.String)">
+<summary>
+ Validates transaction ID format (alphanumeric plus hyphens/underscores, 3-50 characters)
+</summary>
+</member>
+<member name="M:LoanRules.Integrity.validateTimestampFreshness(System.String)">
+<summary>
+ Validates that the timestamp is not too old (within last 24 hours for testing)
+</summary>
+</member>
+<member name="T:LoanRules.Integrity">
+<summary>
+ Module for payload integrity validation
+</summary>
+</member>
 <member name="M:LoanRules.Validation.validatePayload(LoanRules.Types.WebhookPayload)">
 <summary>
  Validates all aspects of a webhook payload

@@ -10,7 +10,7 @@ open System.Reflection
 [<assembly: System.Reflection.AssemblyCompanyAttribute("LoanRules")>]
 [<assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")>]
 [<assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")>]
-[<assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+a08bde56156baa9cb0a7d3a7bbaf5519a16f018b")>]
+[<assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+da157c9dca16076c8cf21d629e7c7a7205ed3b61")>]
 [<assembly: System.Reflection.AssemblyProductAttribute("LoanRules")>]
 [<assembly: System.Reflection.AssemblyTitleAttribute("LoanRules")>]
 [<assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")>]

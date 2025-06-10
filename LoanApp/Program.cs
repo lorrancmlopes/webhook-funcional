@@ -14,12 +14,16 @@ var httpClient = new HttpClient();
 // In-memory storage for transaction IDs to ensure uniqueness
 var processedTransactionIds = new ConcurrentHashSet<string>();
 
+// Configuration for integrity validation
+const string WEBHOOK_SECRET = "webhook-secret-key-2025";
+
 // Webhook endpoint
 app.MapPost("/webhook", async (HttpContext context) =>
 {
     // Debug: Log the entire request
     string? token = context.Request.Headers["X-Webhook-Token"];
-    app.Logger.LogInformation($"Received request with token: {token}");
+    string? signature = context.Request.Headers["X-Webhook-Signature"];
+    app.Logger.LogInformation($"Received request with token: {token}, signature: {signature != null}");
 
     // Simple auth check - if auth header is incorrect, return 400
     if (token != "meu-token-secreto")
@@ -47,6 +51,13 @@ app.MapPost("/webhook", async (HttpContext context) =>
         {
             app.Logger.LogWarning("Empty payload received - returning 400");
             return Results.BadRequest(new { error = "Empty payload" });
+        }
+
+        // Basic payload size validation (before deserialization)
+        if (!LoanRules.Integrity.validatePayloadSize(json))
+        {
+            app.Logger.LogWarning("Payload too large - returning 400");
+            return Results.BadRequest(new { error = "Payload too large" });
         }
 
         var payloadDto = JsonSerializer.Deserialize<WebhookPayloadDto>(json, options);
@@ -96,6 +107,18 @@ app.MapPost("/webhook", async (HttpContext context) =>
             return Results.BadRequest(new { error = errorMessage });
         }
 
+        // NEW: Payload integrity validation
+        var signatureOption = string.IsNullOrEmpty(signature) ? null : FSharpOption<string>.Some(signature);
+        var integrityResult = LoanRules.Integrity.validatePayloadIntegrity(payload, json, signatureOption, WEBHOOK_SECRET);
+
+        if (integrityResult.IsError)
+        {
+            string integrityError = integrityResult.ErrorValue;
+            app.Logger.LogWarning($"Integrity validation failed: {integrityError} - sending cancellation");
+            await SimulateCancellationRequest(payload.TransactionId);
+            return Results.BadRequest(new { error = $"Integrity check failed: {integrityError}" });
+        }
+
         // Check for transaction uniqueness - return 400 for duplicates
         if (!processedTransactionIds.Add(payload.TransactionId))
         {
@@ -107,13 +130,39 @@ app.MapPost("/webhook", async (HttpContext context) =>
         app.Logger.LogInformation($"Valid transaction processed: {payload.TransactionId} - sending confirmation");
         await SimulateConfirmationRequest(payload.TransactionId);
 
-        return Results.Ok(new { message = "Transaction processed successfully" });
+        return Results.Ok(new
+        {
+            message = "Transaction processed successfully",
+            transaction_id = payload.TransactionId,
+            integrity_validated = signature != null
+        });
     }
     catch (Exception ex)
     {
         app.Logger.LogError(ex, "Error processing webhook - returning 400");
         return Results.BadRequest(new { error = ex.Message });
     }
+});
+
+// NEW: Endpoint to generate HMAC signature for testing
+app.MapPost("/generate-signature", async (HttpContext context) =>
+{
+    using var reader = new StreamReader(context.Request.Body);
+    var payload = await reader.ReadToEndAsync();
+
+    if (string.IsNullOrEmpty(payload))
+    {
+        return Results.BadRequest(new { error = "Empty payload" });
+    }
+
+    var signature = LoanRules.Integrity.computeHmacSignature(payload, WEBHOOK_SECRET);
+
+    return Results.Ok(new
+    {
+        signature = signature,
+        header_format = $"X-Webhook-Signature: {signature}",
+        payload_length = payload.Length
+    });
 });
 
 // Simulate sending confirmation to an external service
@@ -169,7 +218,8 @@ async Task SimulateCancellationRequest(string transactionId)
 }
 
 // Start the server
-app.Logger.LogInformation("Webhook server starting up...");
+app.Logger.LogInformation("Webhook server starting up with integrity validation...");
+app.Logger.LogInformation($"HMAC secret configured: {WEBHOOK_SECRET[..10]}...");
 app.Urls.Add("http://localhost:5000");
 app.Run();
 
